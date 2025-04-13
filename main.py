@@ -68,7 +68,7 @@ def generate_thumbnail(video_path):
 # === Main link handler ===
 async def process_link(client, url, msg, chat_id, custom_name=None):
     try:
-        if any(x in url for x in ['youtu', 'vimeo', 'dragoapi', 'dailymotion']):
+        if any(x in url for x in ['youtu', 'vimeo', 'dailymotion']):
             await msg.edit('Downloading via yt-dlp...')
             filepath = download_ytdl(url)
         else:
@@ -121,9 +121,7 @@ async def handle_batch(client, file_bytes, msg, chat_id):
         if not success:
             failed.append(url)
     if failed:
-        await client.send_message(chat_id, "Failed URLs:
-" + '
-'.join(failed))
+        await client.send_message(chat_id, "Failed URLs:\n" + '\n'.join(failed))
     await client.send_message(chat_id, "Upload complete!")
 
 # === Initialize bot ===
@@ -164,3 +162,4 @@ async def batch_handler(event):
 
 print("Bot is running...")
 bot.run_until_disconnected()
+        
