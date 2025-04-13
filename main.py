@@ -68,7 +68,7 @@ def generate_thumbnail(video_path):
 # === Main link handler ===
 async def process_link(client, url, msg, chat_id, custom_name=None):
     try:
-        if any(x in url for x in ['youtu', 'vimeo', 'dailymotion']):
+        if any(x in url for x in ['youtu', 'vimeo', 'dragoapi', 'dailymotion']):
             await msg.edit('Downloading via yt-dlp...')
             filepath = download_ytdl(url)
         else:
