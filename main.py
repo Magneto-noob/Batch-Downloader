@@ -29,7 +29,7 @@ def downstatus(statusfile, message):
                 message.edit(f"__Downloaded__ : **{txt}**"), app.loop
             )
         except: pass
-        time.sleep(5)
+        time.sleep(10)
 
 def upstatus(statusfile, message):
     while os.path.exists(statusfile):
@@ -40,7 +40,7 @@ def upstatus(statusfile, message):
                 message.edit(f"__Uploaded__ : **{txt}**"), app.loop
             )
         except: pass
-        time.sleep(5)
+        time.sleep(10)
 
 def progress(current, total, message, type):
     with open(f"{message.id}{type}status.txt", 'w') as f:
