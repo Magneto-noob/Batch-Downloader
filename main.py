@@ -1,244 +1,166 @@
 import os
 import re
-import time
-import json
-import asyncio
 import urllib.parse
-import subprocess
-import threading
 import requests
-from pyrogram import Client, filters
+import subprocess
+import asyncio
+from telethon import TelegramClient, events
 from yt_dlp import YoutubeDL
+from datetime import datetime
+import traceback
 
-API_ID = 15523035
-API_HASH = "33a37e968712427c2e7971cb03f341b3"
-BOT_TOKEN = "2049170894:AAEtQ6CFBPqhR4api99FqmO56xArWcE0H-o"
-DOWNLOAD_DIR = "downloads"
-COOKIE_FILE = "cookies.txt"
+# === CONFIG ===
+API_ID = 15523035          # Replace with your API ID
+API_HASH = '33a37e968712427c2e7971cb03f341b3'  # Replace with your API Hash
+BOT_TOKEN = '2049170894:AAEtQ6CFBPqhR4api99FqmO56xArWcE0H-o'  # Replace with your Bot Token
 
-app = Client("downloader_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-# === Progress tracking ===
-def downstatus(statusfile, message):
-    while os.path.exists(statusfile):
-        with open(statusfile) as f:
-            txt = f.read()
-        try:
-            asyncio.run_coroutine_threadsafe(
-                message.edit(f"__Downloaded__ : **{txt}**"), app.loop
-            )
-        except: pass
-        time.sleep(10)
-
-def upstatus(statusfile, message):
-    while os.path.exists(statusfile):
-        with open(statusfile) as f:
-            txt = f.read()
-        try:
-            asyncio.run_coroutine_threadsafe(
-                message.edit(f"__Uploaded__ : **{txt}**"), app.loop
-            )
-        except: pass
-        time.sleep(10)
-
-def progress(current, total, message, type):
-    with open(f"{message.id}{type}status.txt", 'w') as f:
-        f.write(f"{current * 100 / total:.1f}%")
-
+# === Get filename from URL or Content-Disposition ===
 def get_filename(url):
     try:
-        resp = requests.head(url, allow_redirects=True, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+        resp = requests.head(url, allow_redirects=True, timeout=10)
         cd = resp.headers.get("Content-Disposition", "")
         if 'filename=' in cd:
-            fname = re.findall('filename="?([^\\\";]+)', cd)
+            fname = re.findall('filename="?([^\";]+)', cd)
             if fname:
                 return fname[0]
         return os.path.basename(urllib.parse.urlparse(url).path)
     except:
         return os.path.basename(urllib.parse.urlparse(url).path)
 
-def generate_thumbnail(video_path):
-    thumb_path = video_path + "_thumb.jpg"
-    subprocess.run(['ffmpeg', '-y', '-i', video_path, '-ss', '00:00:01.000',
-                    '-vframes', '1', thumb_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return thumb_path if os.path.exists(thumb_path) else None
-
-def get_video_metadata(path):
+# === Download with requests ===
+def download_file(url, filepath, msg):
     try:
-        result = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
-            '-show_entries', 'stream=width,height,duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1', path],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        lines = result.stdout.strip().split('\n')
-        return int(float(lines[2])), int(lines[0]), int(lines[1])
-    except:
-        return None, None, None
-
-async def download_ytdl_interactive(client, message, url):
-    try:
-        ydl_opts = {'quiet': True, 'skip_download': True, 'noplaylist': True}
-        if os.path.exists(COOKIE_FILE):
-            ydl_opts['cookiefile'] = COOKIE_FILE
-
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            formats = info.get('formats', [])
-
-        text = "Available formats:\n"
-        format_ids = []
-        for f in formats:
-            if f.get("format_id") and f.get("ext"):
-                desc = f"{f['format_id']}: {f.get('format_note','')} {f.get('resolution','')} {f['ext']} - {f.get('filesize',0)//1048576}MB"
-                format_ids.append(f['format_id'])
-                text += desc + "\n"
-
-        prompt = await message.reply(text + "\nReply with format code (e.g. 18, 137+140). Timeout in 15s...")
-        try:
-            reply = await app.listen(message.chat.id, filters.reply & filters.text, timeout=15)
-            fmt = reply.text.strip()
-            if fmt not in format_ids and '+' not in fmt:
-                await reply.reply("Invalid format. Using best.")
-                fmt = 'bestvideo+bestaudio/best'
-        except asyncio.TimeoutError:
-            await prompt.reply("Timeout. Using best format.")
-            fmt = 'bestvideo+bestaudio/best'
-
-        download_opts = {
-            'format': fmt,
-            'outtmpl': os.path.join(DOWNLOAD_DIR, '%(title)s.%(ext)s'),
-            'noplaylist': True,
-            'quiet': True
-        }
-        if os.path.exists(COOKIE_FILE):
-            download_opts['cookiefile'] = COOKIE_FILE
-
-        with YoutubeDL(download_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return ydl.prepare_filename(info)
-    except Exception as e:
-        await message.reply(f"Download failed: {e}")
+        with requests.get(url, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            with open(filepath, 'wb') as f:
+                for chunk in r.iter_content(1024 * 512):
+                    if chunk:
+                        f.write(chunk)
+        return filepath
+    except Exception:
         return None
 
-async def download_file_with_status(url, filepath, msg):
-    dstatfile = f"{msg.id}downstatus.txt"
-    open(dstatfile, 'w').close()
-    dosta = threading.Thread(target=lambda: downstatus(dstatfile, msg), daemon=True)
-    dosta.start()
+# === YouTube and others ===
+def download_ytdl(url):
+    ydl_opts = {
+        'format': 'bestvideo+bestaudio/best',
+        'outtmpl': '/tmp/%(title)s.%(ext)s',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+    }
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        return ydl.prepare_filename(info)
 
-    for attempt in range(3):
-        try:
-            with requests.get(url, stream=True, timeout=30, headers={'User-Agent': 'Mozilla/5.0'}) as r:
-                r.raise_for_status()
-                total = int(r.headers.get('content-length', 0))
-                downloaded = 0
-                with open(filepath, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            percent = (downloaded / total) * 100 if total else 0
-                            with open(dstatfile, 'w') as df:
-                                df.write(f"{percent:.1f}%")
-            break
-        except:
-            await msg.edit(f"Retrying... ({attempt + 1}/3)")
-            await asyncio.sleep(5)
-    else:
-        os.remove(dstatfile)
-        raise Exception("Download failed")
-
-    os.remove(dstatfile)
-    return filepath
-
-async def upload_file(client, chat_id, filepath, caption, thumb_path=None, msg=None):
-    upstatfile = f"{msg.id}upstatus.txt"
-    open(upstatfile, 'w').close()
-    upsta = threading.Thread(target=lambda: upstatus(upstatfile, msg), daemon=True)
-    upsta.start()
-
+# === Thumbnail generation ===
+def generate_thumbnail(video_path):
+    thumb_path = video_path + "_thumb.jpg"
     try:
-        if filepath.lower().endswith(('.mp4', '.mkv', '.webm', '.mov')):
-            duration, width, height = get_video_metadata(filepath)
-            await client.send_video(
-                chat_id, video=filepath, caption=caption,
-                thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
-                supports_streaming=True, duration=duration, width=width, height=height,
-                progress=progress, progress_args=[msg, "up"]
-            )
-        else:
-            await client.send_document(
-                chat_id, document=filepath, caption=caption,
-                thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
-                progress=progress, progress_args=[msg, "up"]
-            )
-    finally:
-        if os.path.exists(upstatfile):
-            os.remove(upstatfile)
+        subprocess.run([
+            'ffmpeg', '-y', '-i', video_path, '-ss', '00:00:01.000',
+            '-vframes', '1', thumb_path
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return thumb_path if os.path.exists(thumb_path) else None
+    except:
+        return None
 
+# === Main link handler ===
 async def process_link(client, url, msg, chat_id, custom_name=None):
     try:
-        if any(x in url for x in ['youtu', 'vimeo', 'dailymotion', '.m3u8']):
-            filepath = await download_ytdl_interactive(client, msg, url)
+        if any(x in url for x in ['youtu', 'vimeo', 'dailymotion']):
+            await msg.edit('Downloading via yt-dlp...')
+            filepath = download_ytdl(url)
         else:
             fname = custom_name if custom_name else get_filename(url)
-            filepath = os.path.join(DOWNLOAD_DIR, fname)
-            await msg.edit(f'Downloading: {os.path.basename(filepath)}')
-            filepath = await download_file_with_status(url, filepath, msg)
+            filepath = os.path.join('/tmp', fname)
+            await msg.edit(f'Downloading file: {os.path.basename(filepath)}')
+            for attempt in range(3):
+                result = download_file(url, filepath, msg)
+                if result:
+                    break
+                await msg.edit(f"Retrying... ({attempt + 1}/3). Waiting 10 seconds...")
+                await asyncio.sleep(10)
+            else:
+                raise Exception("Download failed")
 
-        thumb_path = generate_thumbnail(filepath)
-        await upload_file(client, chat_id, filepath, os.path.basename(filepath), thumb_path, msg)
-        if thumb_path: os.remove(thumb_path)
+        is_video = filepath.lower().endswith(('.mp4', '.mkv', '.webm', '.mov'))
+        thumb_path = generate_thumbnail(filepath) if is_video else None
+
+        await msg.edit('Uploading to Telegram...')
+        await client.send_file(
+            chat_id,
+            filepath,
+            caption=os.path.basename(filepath),
+            thumb=thumb_path if thumb_path else None,
+            supports_streaming=True if is_video else None
+        )
+
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
         os.remove(filepath)
-        await msg.edit("Upload complete!")
+        await msg.edit('Upload complete!')
         return True
     except Exception as e:
         await msg.edit(f"Failed: {e}")
+        print(traceback.format_exc())
         return False
 
-@app.on_message(filters.command('download'))
-async def single_download(client, message):
-    if len(message.command) < 2:
-        return await message.reply("Usage: /download <url> or name.ext|url")
-    input_line = message.text.split(' ', 1)[1].strip()
-    custom_name, url = (input_line.split('|', 1) + [None])[:2] if '|' in input_line else (None, input_line)
-    msg = await message.reply("Processing...")
-    await process_link(client, url.strip(), msg, message.chat.id, custom_name.strip() if custom_name else None)
-
-@app.on_message(filters.command('batch'))
-async def batch_handler(client, message):
-    if not message.reply_to_message or not message.reply_to_message.document:
-        return await message.reply("Please reply to a `.txt` file with /batch.")
-    file_path = await client.download_media(message.reply_to_message.document, file_name="/tmp/links.txt")
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
-    msg = await message.reply("Starting batch...")
+async def handle_batch(client, file_bytes, msg, chat_id):
+    text = file_bytes.decode()
+    lines = text.strip().splitlines()
     failed = []
+    await msg.edit(f"Processing {len(lines)} links...")
     for line in lines:
-        line = line.strip()
-        if not line or line.startswith('#'): continue
-        custom_name, url = (line.split('|', 1) + [None])[:2] if '|' in line else (None, line)
-        sub_msg = await client.send_message(message.chat.id, f"Starting: {url}")
-        success = await process_link(client, url.strip(), sub_msg, message.chat.id, custom_name.strip() if custom_name else None)
-        if not success: failed.append(url)
+        if '|' in line:
+            url, custom_name = map(str.strip, line.split('|', 1))
+        else:
+            url, custom_name = line.strip(), None
+        sub_msg = await client.send_message(chat_id, f"Starting: {url}")
+        success = await process_link(client, url, sub_msg, chat_id, custom_name)
+        if not success:
+            failed.append(url)
     if failed:
-        await client.send_message(message.chat.id, "Failed URLs:\n" + '\n'.join(failed))
-    await msg.edit("Batch complete.")
+        await client.send_message(chat_id, "Failed URLs:
+" + '
+'.join(failed))
+    await client.send_message(chat_id, "Upload complete!")
 
-@app.on_message(filters.document & filters.private)
-async def upload_cookies(client, message):
-    if message.document.file_name == "cookies.txt":
-        await message.download(file_name=COOKIE_FILE)
-        await message.reply("cookies.txt saved and will be used.")
+# === Initialize bot ===
+bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-@app.on_message(filters.command("delete_cookies"))
-async def delete_cookies(client, message):
-    if os.path.exists(COOKIE_FILE):
-        os.remove(COOKIE_FILE)
-        await message.reply("cookies.txt deleted.")
+@bot.on(events.NewMessage(pattern='/start'))
+async def start(event):
+    await event.reply("Send `/download <URL | optional_name>` or reply with a `.txt` file and `/batch` command.", parse_mode='md')
+
+@bot.on(events.NewMessage(pattern='/download (.+)'))
+async def single_download(event):
+    raw = event.pattern_match.group(1).strip()
+    if '|' in raw:
+        url, custom_name = map(str.strip, raw.split('|', 1))
     else:
-        await message.reply("No cookies.txt found.")
+        url, custom_name = raw, None
+    msg = await event.reply("Processing link...")
+    await process_link(bot, url, msg, event.chat_id, custom_name)
+
+@bot.on(events.NewMessage(pattern='/batch'))
+async def batch_handler(event):
+    if not event.is_reply:
+        return await event.reply("Please reply to a `.txt` file with `/batch`.")
+
+    replied = await event.get_reply_message()
+    if not replied or not replied.document:
+        return await event.reply("Please reply to a `.txt` file with `/batch`.")
+
+    if replied.document.mime_type != "text/plain":
+        return await event.reply("Only `.txt` files are supported.")
+
+    file_path = await bot.download_media(replied.document, file='/tmp/links.txt')
+    with open(file_path, 'rb') as f:
+        content = f.read()
+
+    msg = await event.reply("Starting batch download...")
+    await handle_batch(bot, content, msg, event.chat_id)
 
 print("Bot is running...")
-app.run()
-                            
+bot.run_until_disconnected()
