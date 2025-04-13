@@ -10,11 +10,10 @@ from datetime import datetime
 import traceback
 
 # === CONFIG ===
-API_ID = 15523035          # Replace with your API ID
-API_HASH = '33a37e968712427c2e7971cb03f341b3'  # Replace with your API Hash
-BOT_TOKEN = '2049170894:AAEtQ6CFBPqhR4api99FqmO56xArWcE0H-o'  # Replace with your Bot Token
+API_ID = 15523035
+API_HASH = '33a37e968712427c2e7971cb03f341b3'
+BOT_TOKEN = '2049170894:AAEtQ6CFBPqhR4api99FqmO56xArWcE0H-o'
 
-# === Get filename from URL or Content-Disposition ===
 def get_filename(url):
     try:
         resp = requests.head(url, allow_redirects=True, timeout=10)
@@ -27,7 +26,6 @@ def get_filename(url):
     except:
         return os.path.basename(urllib.parse.urlparse(url).path)
 
-# === Download with requests ===
 def download_file(url, filepath, msg):
     try:
         with requests.get(url, stream=True, timeout=30) as r:
@@ -40,11 +38,14 @@ def download_file(url, filepath, msg):
     except Exception:
         return None
 
-# === YouTube and others ===
-def download_ytdl(url):
+def download_ytdl(url, custom_name=None):
+    if custom_name:
+        name_template = f"/tmp/{custom_name}.%(ext)s"
+    else:
+        name_template = '/tmp/%(title)s.%(ext)s'
     ydl_opts = {
         'format': 'bestvideo+bestaudio/best',
-        'outtmpl': '/tmp/%(title)s.%(ext)s',
+        'outtmpl': name_template,
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
@@ -53,7 +54,6 @@ def download_ytdl(url):
         info = ydl.extract_info(url, download=True)
         return ydl.prepare_filename(info)
 
-# === Thumbnail generation ===
 def generate_thumbnail(video_path):
     thumb_path = video_path + "_thumb.jpg"
     try:
@@ -65,12 +65,11 @@ def generate_thumbnail(video_path):
     except:
         return None
 
-# === Main link handler ===
-async def process_link(client, url, msg, chat_id, custom_name=None):
+async def process_link(client, url, msg, chat_id, custom_name=None, suppress_success=False):
     try:
-        if any(x in url for x in ['youtu', 'vimeo', 'dragoapi', 'dailymotion']):
+        if any(x in url for x in ['youtu', 'vimeo', 'dailymotion']):
             await msg.edit('Downloading via yt-dlp...')
-            filepath = download_ytdl(url)
+            filepath = download_ytdl(url, custom_name)
         else:
             fname = custom_name if custom_name else get_filename(url)
             filepath = os.path.join('/tmp', fname)
@@ -99,7 +98,8 @@ async def process_link(client, url, msg, chat_id, custom_name=None):
         if thumb_path and os.path.exists(thumb_path):
             os.remove(thumb_path)
         os.remove(filepath)
-        await msg.edit('Upload complete!')
+        if not suppress_success:
+            await msg.edit('Upload complete!')
         return True
     except Exception as e:
         await msg.edit(f"Failed: {e}")
@@ -117,14 +117,14 @@ async def handle_batch(client, file_bytes, msg, chat_id):
         else:
             url, custom_name = line.strip(), None
         sub_msg = await client.send_message(chat_id, f"Starting: {url}")
-        success = await process_link(client, url, sub_msg, chat_id, custom_name)
+        success = await process_link(client, url, sub_msg, chat_id, custom_name, suppress_success=True)
         if not success:
             failed.append(url)
     if failed:
         await client.send_message(chat_id, "Failed URLs:\n" + '\n'.join(failed))
     await client.send_message(chat_id, "Upload complete!")
 
-# === Initialize bot ===
+# === Init ===
 bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 @bot.on(events.NewMessage(pattern='/start'))
