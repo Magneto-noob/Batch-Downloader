@@ -143,7 +143,7 @@ async def download_file_with_status(url, filepath, msg):
             break
         except:
             await msg.edit(f"Retrying... ({attempt + 1}/3)")
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)
     else:
         os.remove(dstatfile)
         raise Exception("Download failed")
