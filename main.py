@@ -9,9 +9,9 @@ from pyrogram.types import Message
 from yt_dlp import YoutubeDL
 import subprocess
 
-API_ID = 12345678  # replace with your API ID
-API_HASH = "your_api_hash"
-BOT_TOKEN = "your_bot_token"
+API_ID = 15523035  # replace with your API ID
+API_HASH = "33a37e968712427c2e7971cb03f341b3"
+BOT_TOKEN = "2049170894:AAEtQ6CFBPqhR4api99FqmO56xArWcE0H-o"
 DOWNLOAD_DIR = "downloads"
 COOKIES_FILE = "cookies.txt"
 
@@ -203,3 +203,4 @@ async def youtube_download(client, message: Message):
 
 
 bot.run()
+                                              
