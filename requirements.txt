@@ -2,3 +2,10 @@ pyrogram
 tgcrypto 
 yt-dlp 
 requests
+telethon
+yt-dlp
+requests
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
