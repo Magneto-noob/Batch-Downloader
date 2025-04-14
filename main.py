@@ -118,8 +118,10 @@ async def process_link(client, url, msg, chat_id, custom_name=None, suppress_suc
         if file_size > 2 * 1024 * 1024 * 1024:
             await msg.edit("Uploading to Google Drive (file >2GB)...")
             drive_link = upload_to_drive(filepath)
-            await msg.edit(f"File uploaded to Google Drive:\n{drive_link}")
-        else:
+            new_text = f'File uploaded to Google Drive:\n{drive_link}'
+            if msg.text != new_text:
+                 await msg.edit(new_text)
+                 else:
             await client.send_file(
                 chat_id,
                 filepath,
