@@ -184,7 +184,7 @@ async def receive_token(event):
     if not event.is_reply:
         return await event.reply("Reply to your `token.pickle` file with `/token`.")
     replied = await event.get_reply_message()
-    if not replied.document or not replied.document.file_name.endswith('.pickle'):
+    if not replied.document or not replied.file.name.endswith('.pickle'):
         return await event.reply("That doesn't look like a valid `token.pickle` file.")
     path = await bot.download_media(replied.document, file_name="token.pickle")
     if os.path.exists(path):
