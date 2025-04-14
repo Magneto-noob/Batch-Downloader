@@ -183,14 +183,26 @@ async def start(event):
 async def receive_token(event):
     if not event.is_reply:
         return await event.reply("Reply to your `token.pickle` file with `/token`.")
+
     replied = await event.get_reply_message()
-    if not replied.document or not replied.file.name.endswith('.pickle'):
+
+    if not replied.document:
         return await event.reply("That doesn't look like a valid `token.pickle` file.")
-    path = await bot.download_media(replied.document, file_name="token.pickle")
-    if os.path.exists(path):
-        await event.reply("✅ token.pickle received and saved!")
-    else:
-        await event.reply("❌ Failed to save token.pickle.")
+
+    file_name = replied.file.name if replied.file else None
+    if not file_name or not file_name.endswith('.pickle'):
+        return await event.reply("That doesn't look like a valid `token.pickle` file.")
+
+    temp_path = await bot.download_media(replied.document)
+    if not temp_path:
+        return await event.reply("❌ Failed to download the file.")
+
+    try:
+        os.rename(temp_path, "token.pickle")
+    except Exception as e:
+        return await event.reply(f"❌ Error renaming: {e}")
+
+    return await event.reply("✅ token.pickle received and saved!")
 
 @bot.on(events.NewMessage(pattern='/ytdl$'))
 async def empty_ytdl(event):
