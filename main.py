@@ -44,6 +44,11 @@ def upload_to_drive(filepath):
     service.permissions().create(fileId=file['id'], body={'role': 'reader', 'type': 'anyone'}).execute()
     return f"https://drive.google.com/file/d/{file['id']}/view"
 
+# === Safe message edit ===
+async def safe_edit(msg, new_text):
+    if msg.text != new_text:
+        await msg.edit(new_text)
+
 # === Get filename from URL or Content-Disposition ===
 def get_filename(url):
     try:
@@ -96,17 +101,17 @@ def generate_thumbnail(video_path):
 async def process_link(client, url, msg, chat_id, custom_name=None, suppress_success=False, force_ytdl=False):
     try:
         if force_ytdl or any(x in url for x in ['youtu', 'vimeo', 'dailymotion']):
-            await msg.edit('Downloading via yt-dlp...')
+            await safe_edit(msg, 'Downloading via yt-dlp...')
             filepath = download_ytdl(url, custom_name)
         else:
             fname = custom_name if custom_name else get_filename(url)
             filepath = os.path.join('/tmp', fname)
-            await msg.edit(f'Downloading file: {os.path.basename(filepath)}')
+            await safe_edit(msg, f'Downloading file: {os.path.basename(filepath)}')
             for attempt in range(3):
                 result = download_file(url, filepath, msg)
                 if result:
                     break
-                await msg.edit(f"Retrying... ({attempt + 1}/3). Waiting 10 seconds...")
+                await safe_edit(msg, f"Retrying... ({attempt + 1}/3). Waiting 10 seconds...")
                 await asyncio.sleep(10)
             else:
                 raise Exception("Download failed")
@@ -116,10 +121,11 @@ async def process_link(client, url, msg, chat_id, custom_name=None, suppress_suc
 
         file_size = os.path.getsize(filepath)
         if file_size > 2 * 1024 * 1024 * 1024:
-            await msg.edit("Uploading to Google Drive (file >2GB)...")
+            await safe_edit(msg, "Uploading to Google Drive (file >2GB)...")
             drive_link = upload_to_drive(filepath)
-            await msg.edit(f"File uploaded to Google Drive:\n{drive_link}")
+            await safe_edit(msg, f"File uploaded to Google Drive:\n{drive_link}")
         else:
+            await safe_edit(msg, "Uploading to Telegram...")
             await client.send_file(
                 chat_id,
                 filepath,
@@ -128,14 +134,14 @@ async def process_link(client, url, msg, chat_id, custom_name=None, suppress_suc
                 supports_streaming=is_video and not filepath.endswith('.webm')
             )
             if not suppress_success:
-                await msg.edit("Upload complete!")
+                await safe_edit(msg, "Upload complete!")
 
         if thumb_path and os.path.exists(thumb_path):
             os.remove(thumb_path)
         os.remove(filepath)
         return True
     except Exception as e:
-        await msg.edit(f"Failed: {e}")
+        await safe_edit(msg, f"Failed: {e}")
         print(traceback.format_exc())
         return False
 
@@ -143,7 +149,7 @@ async def handle_batch(client, file_bytes, msg, chat_id):
     text = file_bytes.decode()
     lines = text.strip().splitlines()
     failed = []
-    await msg.edit(f"Processing {len(lines)} links...")
+    await safe_edit(msg, f"Processing {len(lines)} links...")
     for line in lines:
         if '|' in line:
             url, custom_name = map(str.strip, line.split('|', 1))
@@ -193,10 +199,6 @@ async def empty_ytdl(event):
 @bot.on(events.NewMessage(pattern='/download$'))
 async def empty_download(event):
     await event.reply("Usage:\n`/download <Direct URL | optional_name>`", parse_mode='md')
-
-@bot.on(events.NewMessage(pattern='/batch$'))
-async def empty_batch(event):
-    await event.reply("Usage:\nReply to a `.txt` file and send `/batch` to begin downloading.")
 
 @bot.on(events.NewMessage(pattern='/ytdl (.+)'))
 async def yt_download(event):
