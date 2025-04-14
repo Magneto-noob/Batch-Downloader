@@ -4,15 +4,45 @@ import urllib.parse
 import requests
 import subprocess
 import asyncio
+import pickle
 from telethon import TelegramClient, events
 from yt_dlp import YoutubeDL
 from datetime import datetime
 import traceback
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
 # === CONFIG ===
 API_ID = 15523035
 API_HASH = '33a37e968712427c2e7971cb03f341b3'
 BOT_TOKEN = '2049170894:AAEtQ6CFBPqhR4api99FqmO56xArWcE0H-o'
+
+# === Google Drive Upload ===
+def upload_to_drive(filepath):
+    SCOPES = ['https://www.googleapis.com/auth/drive.file']
+    creds = None
+
+    if os.path.exists('token.pickle'):
+        with open('token.pickle', 'rb') as token:
+            creds = pickle.load(token)
+    else:
+        raise Exception("token.pickle not found. Send it using /token command.")
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            raise Exception("token.pickle is invalid or expired.")
+
+    service = build('drive', 'v3', credentials=creds)
+    file_metadata = {'name': os.path.basename(filepath)}
+    media = MediaFileUpload(filepath, resumable=True)
+    file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+
+    service.permissions().create(fileId=file['id'], body={'role': 'reader', 'type': 'anyone'}).execute()
+    return f"https://drive.google.com/file/d/{file['id']}/view"
 
 # === Get filename from URL or Content-Disposition ===
 def get_filename(url):
@@ -27,7 +57,6 @@ def get_filename(url):
     except:
         return os.path.basename(urllib.parse.urlparse(url).path)
 
-# === Download with requests ===
 def download_file(url, filepath, msg):
     try:
         with requests.get(url, stream=True, timeout=30) as r:
@@ -40,7 +69,6 @@ def download_file(url, filepath, msg):
     except Exception:
         return None
 
-# === YouTube and others ===
 def download_ytdl(url, custom_name=None):
     name_template = f"/tmp/{custom_name}.%(ext)s" if custom_name else '/tmp/%(title)s.%(ext)s'
     ydl_opts = {
@@ -54,7 +82,6 @@ def download_ytdl(url, custom_name=None):
         info = ydl.extract_info(url, download=True)
         return ydl.prepare_filename(info)
 
-# === Thumbnail generation ===
 def generate_thumbnail(video_path):
     thumb_path = video_path + "_thumb.jpg"
     try:
@@ -66,13 +93,9 @@ def generate_thumbnail(video_path):
     except:
         return None
 
-# === Main link handler ===
 async def process_link(client, url, msg, chat_id, custom_name=None, suppress_success=False, force_ytdl=False):
     try:
-        if force_ytdl:
-            await msg.edit('Downloading via yt-dlp...')
-            filepath = download_ytdl(url, custom_name)
-        elif any(x in url for x in ['youtu', 'vimeo', 'dailymotion']):
+        if force_ytdl or any(x in url for x in ['youtu', 'vimeo', 'dailymotion']):
             await msg.edit('Downloading via yt-dlp...')
             filepath = download_ytdl(url, custom_name)
         else:
@@ -91,20 +114,25 @@ async def process_link(client, url, msg, chat_id, custom_name=None, suppress_suc
         is_video = filepath.lower().endswith(('.mp4', '.mkv', '.webm', '.mov'))
         thumb_path = generate_thumbnail(filepath) if is_video else None
 
-        await msg.edit('Uploading to Telegram...')
-        await client.send_file(
-            chat_id,
-            filepath,
-            caption=os.path.basename(filepath),
-            thumb=thumb_path if thumb_path else None,
-            supports_streaming=is_video and not filepath.endswith('.webm')
-        )
+        file_size = os.path.getsize(filepath)
+        if file_size > 2 * 1024 * 1024 * 1024:
+            await msg.edit("Uploading to Google Drive (file >2GB)...")
+            drive_link = upload_to_drive(filepath)
+            await msg.edit(f"File uploaded to Google Drive:\n{drive_link}")
+        else:
+            await client.send_file(
+                chat_id,
+                filepath,
+                caption=os.path.basename(filepath),
+                thumb=thumb_path if thumb_path else None,
+                supports_streaming=is_video and not filepath.endswith('.webm')
+            )
+            if not suppress_success:
+                await msg.edit("Upload complete!")
 
         if thumb_path and os.path.exists(thumb_path):
             os.remove(thumb_path)
         os.remove(filepath)
-        if not suppress_success:
-            await msg.edit('Upload complete!')
         return True
     except Exception as e:
         await msg.edit(f"Failed: {e}")
@@ -136,23 +164,39 @@ bot = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
-    await event.reply("Send `/download <URL | optional_name>`, `/ytdl <YouTube/Vimeo URL | optional_name>`, or reply to a `.txt` file with `/batch` command.", parse_mode='md')
+    await event.reply(
+        "Send:\n"
+        "`/download <URL | optional_name>` — Direct file download\n"
+        "`/ytdl <YouTube/Vimeo URL | optional_name>` — Video sites (yt-dlp)\n"
+        "`/token` with a `token.pickle` file to set up Google Drive upload\n"
+        "Or reply to a `.txt` file and send `/batch`.",
+        parse_mode='md'
+    )
 
-@bot.on(events.NewMessage(pattern='/download (.+)'))
-async def single_download(event):
-    raw = event.pattern_match.group(1).strip()
-    if '|' in raw:
-        url, custom_name = map(str.strip, raw.split('|', 1))
+@bot.on(events.NewMessage(pattern='/token'))
+async def receive_token(event):
+    if not event.is_reply:
+        return await event.reply("Reply to your `token.pickle` file with `/token`.")
+    replied = await event.get_reply_message()
+    if not replied.document or not replied.document.file_name.endswith('.pickle'):
+        return await event.reply("That doesn't look like a valid `token.pickle` file.")
+    path = await bot.download_media(replied.document, file_name="token.pickle")
+    if os.path.exists(path):
+        await event.reply("✅ token.pickle received and saved!")
     else:
-        url, custom_name = raw, None
-    if not url.startswith("http"):
-        return await event.reply("Invalid URL")
-    msg = await event.reply("Processing link...")
-    await process_link(bot, url, msg, event.chat_id, custom_name)
+        await event.reply("❌ Failed to save token.pickle.")
 
 @bot.on(events.NewMessage(pattern='/ytdl$'))
 async def empty_ytdl(event):
-    await event.reply("Please provide a YouTube/Vimeo link. Usage:\n`/ytdl <link | optional_name>`", parse_mode='md')
+    await event.reply("Usage:\n`/ytdl <YouTube/Vimeo URL | optional_name>`", parse_mode='md')
+
+@bot.on(events.NewMessage(pattern='/download$'))
+async def empty_download(event):
+    await event.reply("Usage:\n`/download <Direct URL | optional_name>`", parse_mode='md')
+
+@bot.on(events.NewMessage(pattern='/batch$'))
+async def empty_batch(event):
+    await event.reply("Usage:\nReply to a `.txt` file and send `/batch` to begin downloading.")
 
 @bot.on(events.NewMessage(pattern='/ytdl (.+)'))
 async def yt_download(event):
@@ -166,25 +210,33 @@ async def yt_download(event):
     msg = await event.reply("Processing YouTube/Vimeo link...")
     await process_link(bot, url, msg, event.chat_id, custom_name, force_ytdl=True)
 
+@bot.on(events.NewMessage(pattern='/download (.+)'))
+async def single_download(event):
+    raw = event.pattern_match.group(1).strip()
+    if '|' in raw:
+        url, custom_name = map(str.strip, raw.split('|', 1))
+    else:
+        url, custom_name = raw, None
+    if not url.startswith("http"):
+        return await event.reply("Invalid URL")
+    msg = await event.reply("Processing link...")
+    await process_link(bot, url, msg, event.chat_id, custom_name)
+
 @bot.on(events.NewMessage(pattern='/batch'))
 async def batch_handler(event):
     if not event.is_reply:
         return await event.reply("Please reply to a `.txt` file with `/batch`.")
-
     replied = await event.get_reply_message()
     if not replied or not replied.document:
         return await event.reply("Please reply to a `.txt` file with `/batch`.")
-
     if replied.document.mime_type != "text/plain":
         return await event.reply("Only `.txt` files are supported.")
-
     file_path = await bot.download_media(replied.document, file='/tmp/links.txt')
     with open(file_path, 'rb') as f:
         content = f.read()
-
     msg = await event.reply("Starting batch download...")
     await handle_batch(bot, content, msg, event.chat_id)
 
 print("Bot is running...")
 bot.run_until_disconnected()
-            
+    
