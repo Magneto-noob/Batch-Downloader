@@ -20,30 +20,21 @@ API_HASH = '33a37e968712427c2e7971cb03f341b3'
 BOT_TOKEN = '2049170894:AAEtQ6CFBPqhR4api99FqmO56xArWcE0H-o'
 
 # === Google Drive Upload ===
-def upload_to_drive(filepath):
-    SCOPES = ['https://www.googleapis.com/auth/drive.file']
-    creds = None
-
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-    else:
-        raise Exception("token.pickle not found. Send it using /token command.")
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            raise Exception("token.pickle is invalid or expired.")
-
-    service = build('drive', 'v3', credentials=creds)
-    file_metadata = {'name': os.path.basename(filepath)}
-    media = MediaFileUpload(filepath, resumable=True)
-    file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-
-    service.permissions().create(fileId=file['id'], body={'role': 'reader', 'type': 'anyone'}).execute()
-    return f"https://drive.google.com/file/d/{file['id']}/view"
-
+async def upload_to_gdrive(file_path, event):
+    from pydrive.auth import GoogleAuth
+    from pydrive.drive import GoogleDrive
+    gauth = GoogleAuth()
+    gauth.LoadCredentialsFile("token.pickle")
+    if gauth.credentials is None:
+        await event.edit("No Google Drive token found.")
+        return
+    gauth.Authorize()
+    drive = GoogleDrive(gauth)
+    file = drive.CreateFile({'title': os.path.basename(file_path)})
+    file.SetContentFile(file_path)
+    file.Upload()
+    await event.edit("Uploaded to Google Drive.")
+    
 # === Safe message edit ===
 async def safe_edit(msg, new_text):
     if msg.text != new_text:
